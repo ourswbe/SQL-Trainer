@@ -1,0 +1,9 @@
+version: '3.9'
+services:
+  sql-trainer:
+    build: .
+    container_name: sql-trainer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/backend/data
