@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQL Trainer</title>
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 1100px; margin: 20px auto; padding: 0 12px; }
+      .row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+      input, button, textarea, select { padding: 8px; font-size: 14px; }
+      textarea { width: 100%; min-height: 120px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+      th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>SQL Trainer</h1>
+
+    <div id="auth" class="card">
+      <h3>Вход / регистрация</h3>
+      <div class="row">
+        <input id="username" placeholder="Логин" />
+        <input id="password" type="password" placeholder="Пароль" />
+        <button onclick="register()">Регистрация</button>
+        <button onclick="login()">Вход</button>
+      </div>
+      <div id="authMsg"></div>
+    </div>
+
+    <div id="app" class="hidden">
+      <div class="card">
+        <h3>Задания</h3>
+        <select id="taskSelect" onchange="loadTask()"></select>
+        <div id="taskDetails"></div>
+      </div>
+
+      <div class="card">
+        <h3>SQL Editor</h3>
+        <textarea id="query">SELECT * FROM students;</textarea>
+        <div class="row">
+          <button onclick="runQuery()">Выполнить</button>
+          <button onclick="checkTask()">Проверить</button>
+          <button onclick="clearEditor()">Очистить</button>
+          <button onclick="loadSchema()">Схема БД</button>
+          <button onclick="loadProgress()">Мой прогресс</button>
+        </div>
+        <div id="status"></div>
+        <div id="output"></div>
+      </div>
+    </div>
+
+    <script>
+      let token = localStorage.getItem('token') || '';
+      let tasks = [];
+
+      function authHeaders() {
+        return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      }
+
+      function showApp() {
+        document.getElementById('auth').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+      }
+
+      async function register() {
+        await authCall('/api/auth/register');
+      }
+
+      async function login() {
+        await authCall('/api/auth/login');
+      }
+
+      async function authCall(path) {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+        const data = await r.json();
+        if (!r.ok) {
+          document.getElementById('authMsg').innerText = data.detail || 'Ошибка';
+          return;
+        }
+        token = data.token;
+        localStorage.setItem('token', token);
+        showApp();
+        await loadTasks();
+      }
+
+      async function loadTasks() {
+        const r = await fetch('/api/tasks', { headers: authHeaders() });
+        if (!r.ok) return;
+        tasks = await r.json();
+        const select = document.getElementById('taskSelect');
+        select.innerHTML = tasks.map(t => `<option value="${t.id}">${t.id}. ${t.title}</option>`).join('');
+        loadTask();
+      }
+
+      function loadTask() {
+        const id = Number(document.getElementById('taskSelect').value);
+        const task = tasks.find(t => t.id === id);
+        if (!task) return;
+        document.getElementById('taskDetails').innerHTML = `<p><b>Сложность:</b> ${task.difficulty}</p><p><b>Тема:</b> ${task.topic}</p><p>${task.description}</p>`;
+      }
+
+      function renderTable(result) {
+        if (!result.columns || result.columns.length === 0) return '<p>Нет данных</p>';
+        const head = `<tr>${result.columns.map(c => `<th>${c}</th>`).join('')}</tr>`;
+        const body = result.rows.map(r => `<tr>${result.columns.map(c => `<td>${r[c] ?? ''}</td>`).join('')}</tr>`).join('');
+        return `<table>${head}${body}</table>`;
+      }
+
+      async function runQuery() {
+        const query = document.getElementById('query').value;
+        const r = await fetch('/api/sql/execute', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ query }) });
+        const data = await r.json();
+        document.getElementById('status').innerText = r.ok ? 'Выполнено' : data.detail;
+        document.getElementById('output').innerHTML = r.ok ? renderTable(data) : '';
+      }
+
+      async function checkTask() {
+        const taskId = document.getElementById('taskSelect').value;
+        const query = document.getElementById('query').value;
+        const r = await fetch(`/api/tasks/${taskId}/check`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ query }) });
+        const data = await r.json();
+        document.getElementById('status').innerText = r.ok ? data.message : data.detail;
+        if (r.ok) document.getElementById('output').innerHTML = renderTable(data.result);
+      }
+
+      function clearEditor() {
+        document.getElementById('query').value = '';
+      }
+
+      async function loadSchema() {
+        const r = await fetch('/api/schema', { headers: authHeaders() });
+        const data = await r.json();
+        if (!r.ok) return;
+        const html = Object.entries(data).map(([table, cols]) => `<h4>${table}</h4><ul>${cols.map(c => `<li>${c.name} (${c.type})</li>`).join('')}</ul>`).join('');
+        document.getElementById('output').innerHTML = html;
+      }
+
+      async function loadProgress() {
+        const r = await fetch('/api/progress', { headers: authHeaders() });
+        const data = await r.json();
+        if (!r.ok) return;
+        document.getElementById('output').innerHTML = `<p>Решено задач: ${data.solved_tasks}</p><p>Попыток: ${data.attempts}</p><p>Успешность: ${data.success_rate}%</p>`;
+      }
+
+      (async () => {
+        if (!token) return;
+        const r = await fetch('/api/tasks', { headers: authHeaders() });
+        if (r.ok) {
+          showApp();
+          await loadTasks();
+        } else {
+          localStorage.removeItem('token');
+        }
+      })();
+    </script>
+  </body>
+</html>
